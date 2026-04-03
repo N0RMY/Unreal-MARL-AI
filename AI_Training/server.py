@@ -266,14 +266,14 @@ def handle_client(conn, addr):
                 
                 h_mean, h_std = hider_model(state_tensor)
                 h_dist = Normal(h_mean, h_std)
-                h_action = h_dist.sample()
+                h_action = h_mean
                 hider_memory.saved_log_probs.append(h_dist.log_prob(h_action).sum(dim=-1))
                 hider_memory.entropies.append(h_dist.entropy().sum(dim=-1))
                 h_action_clipped = torch.clamp(h_action, -1.0, 1.0).squeeze().tolist()
 
                 s_mean, s_std = seeker_model(state_tensor)
                 s_dist = Normal(s_mean, s_std)
-                s_action = s_dist.sample()
+                s_action = s_mean
                 seeker_memory.saved_log_probs.append(s_dist.log_prob(s_action).sum(dim=-1))
                 seeker_memory.entropies.append(s_dist.entropy().sum(dim=-1))
                 s_action_clipped = torch.clamp(s_action, -1.0, 1.0).squeeze().tolist()
