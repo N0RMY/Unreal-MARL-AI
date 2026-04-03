@@ -1,0 +1,19 @@
+﻿# 1. Скомпільована гра (ігноруємо повністю, бо важить >1 ГБ)
+Windows/
+
+# 2. Тимчасові файли та кеш Unreal Engine (у папці Kursova2)
+Kursova2/Binaries/
+Kursova2/DerivedDataCache/
+Kursova2/Intermediate/
+Kursova2/Saved/
+Kursova2/Build/
+Kursova2/*.log
+
+# 3. Тимчасові файли Python, віртуальне середовище та логи
+AI_Training/__pycache__/
+AI_Training/*.pyc
+AI_Training/venv/
+AI_Training/env/
+AI_Training/training_log.txt
+Kursova_AI_Build_v1.rar
+Kursova2/.vs/
