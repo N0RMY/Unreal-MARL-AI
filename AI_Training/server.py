@@ -11,6 +11,12 @@ import torch.optim as optim
 from torch.distributions import Normal
 import logging 
 
+# --- ФІКС ШЛЯХІВ: Визначаємо точну папку, де лежить server.py ---
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+HIDER_MODEL_PATH = os.path.join(SCRIPT_DIR, "hider_model.pth")
+SEEKER_MODEL_PATH = os.path.join(SCRIPT_DIR, "seeker_model.pth")
+LOG_PATH = os.path.join(SCRIPT_DIR, "training_log.txt")
+
 # ==========================================
 # НАЛАШТУВАННЯ ЛОГУВАННЯ
 # ==========================================
@@ -18,7 +24,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(message)s",
     handlers=[
-        logging.FileHandler("training_log.txt", encoding="utf-8"),
+        logging.FileHandler(LOG_PATH, encoding="utf-8"), # Тепер лог теж зберігається в правильну папку
         logging.StreamHandler()
     ]
 )
@@ -50,12 +56,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 hider_model = PolicyNetwork(input_dim=25, action_dim=2).to(device)
 seeker_model = PolicyNetwork(input_dim=25, action_dim=2).to(device)
 
-if os.path.exists("hider_model.pth"):
-    hider_model.load_state_dict(torch.load("hider_model.pth", map_location=device, weights_only=True))
+# --- ЗМІНЕНО: Використовуємо абсолютні шляхи ---
+if os.path.exists(HIDER_MODEL_PATH):
+    hider_model.load_state_dict(torch.load(HIDER_MODEL_PATH, map_location=device, weights_only=True))
     logging.info("✅ Завантажено попередній мозок Hider-а!")
 
-if os.path.exists("seeker_model.pth"):
-    seeker_model.load_state_dict(torch.load("seeker_model.pth", map_location=device, weights_only=True))
+if os.path.exists(SEEKER_MODEL_PATH):
+    seeker_model.load_state_dict(torch.load(SEEKER_MODEL_PATH, map_location=device, weights_only=True))
     logging.info("✅ Завантажено попередній мозок Seeker-а!")
 
 hider_model.train()
@@ -238,8 +245,9 @@ def handle_client(conn, addr):
                     
                     rounds_played += 1
                     if rounds_played % 50 == 0:
-                        torch.save(hider_model.state_dict(), "hider_model.pth")
-                        torch.save(seeker_model.state_dict(), "seeker_model.pth")
+                        # --- ЗМІНЕНО: Зберігаємо за абсолютними шляхами ---
+                        torch.save(hider_model.state_dict(), HIDER_MODEL_PATH)
+                        torch.save(seeker_model.state_dict(), SEEKER_MODEL_PATH)
                         logging.info(f"💾 ПРОГРЕС ЗБЕРЕЖЕНО! (Пройдено раундів: {rounds_played})")
                     
                     out_msg = {"ok": True, "hider_move": 0.0, "hider_turn": 0.0, "seeker_move": 0.0, "seeker_turn": 0.0}
