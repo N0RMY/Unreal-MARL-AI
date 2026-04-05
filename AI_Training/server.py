@@ -53,17 +53,23 @@ class PolicyNetwork(nn.Module):
 # ==========================================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-hider_model = PolicyNetwork(input_dim=25, action_dim=2).to(device)
-seeker_model = PolicyNetwork(input_dim=25, action_dim=2).to(device)
+hider_model = PolicyNetwork(input_dim=16, action_dim=2).to(device)
+seeker_model = PolicyNetwork(input_dim=16, action_dim=2).to(device)
 
 # --- ЗМІНЕНО: Використовуємо абсолютні шляхи ---
 if os.path.exists(HIDER_MODEL_PATH):
-    hider_model.load_state_dict(torch.load(HIDER_MODEL_PATH, map_location=device, weights_only=True))
-    logging.info("✅ Завантажено попередній мозок Hider-а!")
+    try:
+        hider_model.load_state_dict(torch.load(HIDER_MODEL_PATH, map_location=device, weights_only=True))
+        logging.info("✅ Завантажено попередній мозок Hider-а!")
+    except Exception as e:
+        logging.warning(f"⚠️ Не вдалось завантажити Hider модель (несумісна архітектура?): {e}. Починаємо з нуля.")
 
 if os.path.exists(SEEKER_MODEL_PATH):
-    seeker_model.load_state_dict(torch.load(SEEKER_MODEL_PATH, map_location=device, weights_only=True))
-    logging.info("✅ Завантажено попередній мозок Seeker-а!")
+    try:
+        seeker_model.load_state_dict(torch.load(SEEKER_MODEL_PATH, map_location=device, weights_only=True))
+        logging.info("✅ Завантажено попередній мозок Seeker-а!")
+    except Exception as e:
+        logging.warning(f"⚠️ Не вдалось завантажити Seeker модель (несумісна архітектура?): {e}. Починаємо з нуля.")
 
 hider_model.train()
 hider_optimizer = optim.Adam(hider_model.parameters(), lr=0.0005)
@@ -138,7 +144,7 @@ def train_step(model, optimizer, memory, agent_name):
 HOST = "127.0.0.1"
 PORT = 5555
 
-MAX_POS = 2000.0
+MAX_POS = 7000.0  # Мапа 1: X[-2000..2000], Y[2680..6690]; Мапа 2: X[-2000..2000], Y[-2000..2000]
 MAX_VEL = 1000.0
 MAX_SENSOR = 1500.0
 
@@ -255,25 +261,38 @@ def handle_client(conn, addr):
                     conn.sendall(struct.pack("!I", len(out)) + out)
                     continue
 
-                state = [
+                h_vel = obs.get("hider_vel", [0.0, 0.0])
+                s_vel = obs.get("seeker_vel", [0.0, 0.0])
+
+                # Hider бачить: своя позиція, позиція seeker'а, своя швидкість, дистанція, свій радар, свої сенсори
+                hider_state = [
                     obs["hider"][0] / MAX_POS, obs["hider"][1] / MAX_POS,
                     obs["seeker"][0] / MAX_POS, obs["seeker"][1] / MAX_POS,
-                    obs["vel"][0] / MAX_VEL, obs["vel"][1] / MAX_VEL,
-                    dist, seeker_radar, hider_radar
-                ] + h_sensors + s_sensors
-                
-                state_tensor = torch.FloatTensor(state).to(device).unsqueeze(0)
-                
-                h_mean, h_std = hider_model(state_tensor)
+                    h_vel[0] / MAX_VEL, h_vel[1] / MAX_VEL,
+                    dist, hider_radar
+                ] + h_sensors
+
+                # Seeker бачить: своя позиція, позиція hider'а, своя швидкість, дистанція, свій радар, свої сенсори
+                seeker_state = [
+                    obs["seeker"][0] / MAX_POS, obs["seeker"][1] / MAX_POS,
+                    obs["hider"][0] / MAX_POS, obs["hider"][1] / MAX_POS,
+                    s_vel[0] / MAX_VEL, s_vel[1] / MAX_VEL,
+                    dist, seeker_radar
+                ] + s_sensors
+
+                hider_state_tensor = torch.FloatTensor(hider_state).to(device).unsqueeze(0)
+                seeker_state_tensor = torch.FloatTensor(seeker_state).to(device).unsqueeze(0)
+
+                h_mean, h_std = hider_model(hider_state_tensor)
                 h_dist = Normal(h_mean, h_std)
-                h_action = h_mean
+                h_action = h_dist.rsample()
                 hider_memory.saved_log_probs.append(h_dist.log_prob(h_action).sum(dim=-1))
                 hider_memory.entropies.append(h_dist.entropy().sum(dim=-1))
                 h_action_clipped = torch.clamp(h_action, -1.0, 1.0).squeeze().tolist()
 
-                s_mean, s_std = seeker_model(state_tensor)
+                s_mean, s_std = seeker_model(seeker_state_tensor)
                 s_dist = Normal(s_mean, s_std)
-                s_action = s_mean
+                s_action = s_dist.rsample()
                 seeker_memory.saved_log_probs.append(s_dist.log_prob(s_action).sum(dim=-1))
                 seeker_memory.entropies.append(s_dist.entropy().sum(dim=-1))
                 s_action_clipped = torch.clamp(s_action, -1.0, 1.0).squeeze().tolist()
