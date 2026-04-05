@@ -154,7 +154,7 @@ bool USocketClient::SendJsonAndReceiveJson(const FString& OutJson, FString& InJs
 }
 
 
-FString USocketClient::BuildStepJson(const FVector& HiderLoc, const FVector& SeekerLoc, const FVector& Vel, const TArray<float>& HiderSensors, const TArray<float>& SeekerSensors, float Reward, bool bDone, float HiderYaw, float SeekerYaw)
+FString USocketClient::BuildStepJson(const FVector& HiderLoc, const FVector& SeekerLoc, const FVector& HiderVel, const FVector& SeekerVel, const TArray<float>& HiderSensors, const TArray<float>& SeekerSensors, float Reward, bool bDone, float HiderYaw, float SeekerYaw)
 {
     TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
     Root->SetStringField(TEXT("cmd"), TEXT("step"));
@@ -171,7 +171,8 @@ FString USocketClient::BuildStepJson(const FVector& HiderLoc, const FVector& See
 
     Obs->SetArrayField(TEXT("hider"), Make2(HiderLoc.X, HiderLoc.Y));
     Obs->SetArrayField(TEXT("seeker"), Make2(SeekerLoc.X, SeekerLoc.Y));
-    Obs->SetArrayField(TEXT("vel"), Make2(Vel.X, Vel.Y));
+    Obs->SetArrayField(TEXT("hider_vel"), Make2(HiderVel.X, HiderVel.Y));
+    Obs->SetArrayField(TEXT("seeker_vel"), Make2(SeekerVel.X, SeekerVel.Y));
 
     // Додаємо сенсори Hider'а 
     TArray<TSharedPtr<FJsonValue>> HiderSensorsJson;
@@ -225,7 +226,7 @@ bool USocketClient::ExtractAction(const FString& InJson, float& OutHiderMove, fl
     return true;
 }
 
-bool USocketClient::Step(const FVector& HiderLoc, const FVector& SeekerLoc, const FVector& Vel, const TArray<float>& HiderSensors, const TArray<float>& SeekerSensors, float Reward, bool bDone, float HiderYaw, float SeekerYaw, float& OutHiderMove, float& OutHiderTurn, float& OutSeekerMove, float& OutSeekerTurn, FString& OutResponseJson)
+bool USocketClient::Step(const FVector& HiderLoc, const FVector& SeekerLoc, const FVector& HiderVel, const FVector& SeekerVel, const TArray<float>& HiderSensors, const TArray<float>& SeekerSensors, float Reward, bool bDone, float HiderYaw, float SeekerYaw, float& OutHiderMove, float& OutHiderTurn, float& OutSeekerMove, float& OutSeekerTurn, FString& OutResponseJson)
 {
     OutHiderMove = 0.0f;
     OutHiderTurn = 0.0f;
@@ -233,8 +234,7 @@ bool USocketClient::Step(const FVector& HiderLoc, const FVector& SeekerLoc, cons
     OutSeekerTurn = 0.0f;
     OutResponseJson.Empty();
 
-    // Передаємо нові масиви сенсорів у генератор JSON разом з Reward та bDone
-    const FString OutJson = BuildStepJson(HiderLoc, SeekerLoc, Vel, HiderSensors, SeekerSensors, Reward, bDone, HiderYaw, SeekerYaw);
+    const FString OutJson = BuildStepJson(HiderLoc, SeekerLoc, HiderVel, SeekerVel, HiderSensors, SeekerSensors, Reward, bDone, HiderYaw, SeekerYaw);
 
     if (!SendJsonAndReceiveJson(OutJson, OutResponseJson))
         return false;
