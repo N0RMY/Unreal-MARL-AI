@@ -51,7 +51,7 @@ class PolicyNetwork(nn.Module):
 # ==========================================
 # 2. Ініціалізація та Завантаження Пам'яті
 # ==========================================
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")  # Мережа мала (16→128→128→2), CPU достатньо; GPU ділиться з UE → OOM
 
 hider_model = PolicyNetwork(input_dim=16, action_dim=2).to(device)
 seeker_model = PolicyNetwork(input_dim=16, action_dim=2).to(device)
