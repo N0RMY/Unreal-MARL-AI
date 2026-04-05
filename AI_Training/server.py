@@ -77,16 +77,18 @@ hider_optimizer = optim.Adam(hider_model.parameters(), lr=0.0005)
 seeker_model.train()
 seeker_optimizer = optim.Adam(seeker_model.parameters(), lr=0.0005)
 
+MAX_STEPS_PER_EPISODE = 2000  # ~67 сек при 30 fps; страховка від OOM
+
 class RolloutBuffer:
     def __init__(self):
-        self.saved_log_probs = []
-        self.rewards = []
-        self.entropies = []
-        
+        self.states  = []   # List[Tensor [16]], detached, CPU — НЕ зберігаємо граф
+        self.actions = []   # List[Tensor [2]],  detached, CPU
+        self.rewards = []   # List[float]
+
     def clear(self):
-        self.saved_log_probs.clear()
+        self.states.clear()
+        self.actions.clear()
         self.rewards.clear()
-        self.entropies.clear()
 
 hider_memory = RolloutBuffer()
 seeker_memory = RolloutBuffer()
@@ -95,46 +97,43 @@ seeker_memory = RolloutBuffer()
 # 4. Логіка Тренування
 # ==========================================
 def train_step(model, optimizer, memory, agent_name):
-    if len(memory.rewards) == 0 or len(memory.saved_log_probs) == 0:
+    n = min(len(memory.states), len(memory.rewards))
+    if n == 0:
         memory.clear()
         return
 
-    min_len = min(len(memory.rewards), len(memory.saved_log_probs))
-    memory.rewards = memory.rewards[:min_len]
-    memory.saved_log_probs = memory.saved_log_probs[:min_len]
-    memory.entropies = memory.entropies[:min_len]
+    total_reward = sum(memory.rewards[:n])
+    steps_taken  = n
 
+    # Дисконтовані повернення
     running_reward = 0
     returns = []
-    gamma = 0.99 
-    
-    # Рахуємо статистику для логів перед нормалізацією
-    total_reward = sum(memory.rewards)
-    steps_taken = len(memory.rewards)
-    
-    for r in memory.rewards[::-1]:
+    gamma = 0.99
+    for r in memory.rewards[:n][::-1]:
         running_reward = r + gamma * running_reward
         returns.insert(0, running_reward)
-        
-    returns = torch.tensor(returns).to(device)
-    
-    if returns.std() > 0:
+
+    returns = torch.tensor(returns, dtype=torch.float32).to(device)
+    if returns.std() > 1e-8:
         returns = (returns - returns.mean()) / (returns.std() + 1e-7)
     else:
         returns = returns - returns.mean()
-    
-    policy_loss = []
-    for log_prob, R in zip(memory.saved_log_probs, returns):
-        policy_loss.append(-log_prob * R)
-        
+
+    # Батчевий форвард-пас: перераховуємо log_prob та entropy БЕЗ накопичення графів
+    states_batch  = torch.stack(memory.states[:n]).to(device)   # [N, 16]
+    actions_batch = torch.stack(memory.actions[:n]).to(device)  # [N, 2]
+
+    mean, std = model(states_batch)
+    dist      = Normal(mean, std)
+    log_probs = dist.log_prob(actions_batch).sum(dim=-1)  # [N]
+    entropies = dist.entropy().sum(dim=-1)                # [N]
+
     optimizer.zero_grad()
-    
-    loss = torch.stack(policy_loss).mean() - 0.01 * torch.stack(memory.entropies).mean()
-    
+    loss = (-log_probs * returns).mean() - 0.01 * entropies.mean()
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
-    
+
     memory.clear()
     logging.info(f"[НАВЧАННЯ] {agent_name} оновлено! Loss: {loss.item():.4f} | Балів за раунд: {total_reward:.4f} | Кроків: {steps_taken}")
 
@@ -239,10 +238,6 @@ def handle_client(conn, addr):
                 hider_reward = -seeker_reward
                 # ====================================================
 
-                if len(hider_memory.saved_log_probs) > len(hider_memory.rewards):
-                    hider_memory.rewards.append(hider_reward)
-                    seeker_memory.rewards.append(seeker_reward)
-
                 if is_done:
                     last_dist = None
                     last_seeker_move = 0.0 # Скидаємо рух для нового раунду
@@ -280,25 +275,36 @@ def handle_client(conn, addr):
                     dist, seeker_radar
                 ] + s_sensors
 
-                hider_state_tensor = torch.FloatTensor(hider_state).to(device).unsqueeze(0)
-                seeker_state_tensor = torch.FloatTensor(seeker_state).to(device).unsqueeze(0)
+                hider_state_tensor  = torch.FloatTensor(hider_state).unsqueeze(0).to(device)
+                seeker_state_tensor = torch.FloatTensor(seeker_state).unsqueeze(0).to(device)
 
-                h_mean, h_std = hider_model(hider_state_tensor)
-                h_dist = Normal(h_mean, h_std)
-                h_action = h_dist.rsample()
-                hider_memory.saved_log_probs.append(h_dist.log_prob(h_action).sum(dim=-1))
-                hider_memory.entropies.append(h_dist.entropy().sum(dim=-1))
-                h_action_clipped = torch.clamp(h_action, -1.0, 1.0).squeeze().tolist()
+                # Inference без збереження графів — torch.no_grad() для самплювання
+                with torch.no_grad():
+                    h_mean, h_std = hider_model(hider_state_tensor)
+                    h_action = Normal(h_mean, h_std).rsample()
+                    h_action_clipped = torch.clamp(h_action, -1.0, 1.0).squeeze().tolist()
 
-                s_mean, s_std = seeker_model(seeker_state_tensor)
-                s_dist = Normal(s_mean, s_std)
-                s_action = s_dist.rsample()
-                seeker_memory.saved_log_probs.append(s_dist.log_prob(s_action).sum(dim=-1))
-                seeker_memory.entropies.append(s_dist.entropy().sum(dim=-1))
-                s_action_clipped = torch.clamp(s_action, -1.0, 1.0).squeeze().tolist()
-                
+                    s_mean, s_std = seeker_model(seeker_state_tensor)
+                    s_action = Normal(s_mean, s_std).rsample()
+                    s_action_clipped = torch.clamp(s_action, -1.0, 1.0).squeeze().tolist()
+
+                # Зберігаємо стани та дії на CPU без графа — graph-free, без витоку VRAM
+                hider_memory.states.append(hider_state_tensor.detach().squeeze(0).cpu())
+                hider_memory.actions.append(h_action.detach().squeeze(0).cpu())
+                hider_memory.rewards.append(hider_reward)
+
+                seeker_memory.states.append(seeker_state_tensor.detach().squeeze(0).cpu())
+                seeker_memory.actions.append(s_action.detach().squeeze(0).cpu())
+                seeker_memory.rewards.append(seeker_reward)
+
                 # Оновлюємо змінну для перевірки на наступному кадрі
                 last_seeker_move = s_action_clipped[0]
+
+                # Страховка: якщо епізод дуже довгий — тренуємось і продовжуємо
+                if len(hider_memory.rewards) >= MAX_STEPS_PER_EPISODE:
+                    logging.info(f"[ЛІМІТ КРОКІВ] Досягнуто {MAX_STEPS_PER_EPISODE} кроків — проміжне навчання.")
+                    train_step(hider_model,  hider_optimizer,  hider_memory,  "Hider")
+                    train_step(seeker_model, seeker_optimizer, seeker_memory, "Seeker")
                 
                 out_msg = {
                     "ok": True, 
