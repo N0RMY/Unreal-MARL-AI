@@ -138,7 +138,7 @@ def train_step(model, optimizer, memory, agent_name):
 HOST = "127.0.0.1"
 PORT = 5555
 
-MAX_POS = 2000.0
+MAX_POS = 6000.0
 MAX_VEL = 1000.0
 MAX_SENSOR = 1500.0
 
@@ -152,12 +152,9 @@ def recvall(conn, n):
 
 def handle_client(conn, addr):
     logging.info(f"Client connected: {addr}")
-    last_dist = None 
-    rounds_played = 0 
-    
-    # Змінна для відстеження попередньої дії (щоб штрафувати за задній хід)
-    last_seeker_move = 0.0 
-    
+    last_dist = None
+    rounds_played = 0
+
     with conn:
         while True:
             raw_len = recvall(conn, 4)
@@ -222,9 +219,6 @@ def handle_client(conn, addr):
                     if min_wall_dist < 0.05: # Якщо до стіни менше 5% дистанції променя
                         seeker_reward -= 0.05 
                         
-                # --- Штраф за рух задом ---
-                if last_seeker_move < -0.1:
-                    seeker_reward -= 0.03
                 
                 ue_reward = msg.get("reward", 0.0)
                 if abs(ue_reward) > 1.0: 
@@ -239,7 +233,6 @@ def handle_client(conn, addr):
 
                 if is_done:
                     last_dist = None
-                    last_seeker_move = 0.0 # Скидаємо рух для нового раунду
                     train_step(hider_model, hider_optimizer, hider_memory, "Hider")
                     train_step(seeker_model, seeker_optimizer, seeker_memory, "Seeker")
                     
@@ -266,20 +259,20 @@ def handle_client(conn, addr):
                 
                 h_mean, h_std = hider_model(state_tensor)
                 h_dist = Normal(h_mean, h_std)
-                h_action = h_mean
+                h_action = h_dist.rsample()
                 hider_memory.saved_log_probs.append(h_dist.log_prob(h_action).sum(dim=-1))
                 hider_memory.entropies.append(h_dist.entropy().sum(dim=-1))
                 h_action_clipped = torch.clamp(h_action, -1.0, 1.0).squeeze().tolist()
 
                 s_mean, s_std = seeker_model(state_tensor)
                 s_dist = Normal(s_mean, s_std)
-                s_action = s_mean
+                s_action = s_dist.rsample()
                 seeker_memory.saved_log_probs.append(s_dist.log_prob(s_action).sum(dim=-1))
                 seeker_memory.entropies.append(s_dist.entropy().sum(dim=-1))
                 s_action_clipped = torch.clamp(s_action, -1.0, 1.0).squeeze().tolist()
-                
-                # Оновлюємо змінну для перевірки на наступному кадрі
-                last_seeker_move = s_action_clipped[0]
+                # --- Штраф за рух задом (поточна дія) ---
+                if s_action_clipped[0] < -0.1:
+                    seeker_reward -= abs(s_action_clipped[0]) * 0.15
                 
                 out_msg = {
                     "ok": True, 
